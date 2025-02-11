@@ -1,0 +1,1137 @@
+---
+title: "COVID-19 Pandemic (AIMS)"
+author: "Alyssa April Dellow"
+date: "14 August 2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Load Libraries
+
+```{r libraries, message = FALSE, warning = FALSE}
+library(readxl) # to import the data in Excel to R
+library(igraph) # for network analysis
+library(DescTools) # access to FisherZ() and FisherZInv() functions
+library(corrplot) # to visualise the correlation matrix
+library(dplyr) # to use pipe operator
+library(huxtable) # to create tables
+library(CINNA) # to find two centrality measures with the biggest contributions
+library(ggplot2)
+```
+### Set Colour of COVID-19 Subsectors
+
+```{r set colour, echo = FALSE}
+subsectors_C19 <- read_excel("C:/Users/User/Desktop/Masters/ICMS5/COVID-19 Data Set.xlsx",
+                             sheet = 2) # load Excel sheet of used constituents into R
+
+df_C19 <- data.frame(subsectors_C19)
+
+colnames(df_C19) <- c("RIC", "Company Name", "Subsectors")
+
+colour <- c("#a24857", "#00FF00", "#F5F5DC", "#FFFF00", "#FFA500", "#FFC0CB", "#CF9FFF", "#7f7f7f") # 8 different colours
+
+clr <- colour[as.numeric(as.factor(df_C19$Subsectors))]
+```
+
+### Pre-COVID-19 Network
+
+```{r pre network, message = FALSE, warning = FALSE}
+
+close_price_preC19 <- read_excel("C:/Users/User/Desktop/Masters/ICMS5/COVID-19 Data Set.xlsx", 
+                                 sheet = 4) # load Excel sheet into R
+
+logreturnf <- function(x) { # function to find log returns of closing prices
+  diff(log(x))
+}
+
+# remove "Exchange Date" column
+close_clean_preC19 <- close_price_preC19[2:ncol(close_price_preC19)] 
+
+returns_preC19 <- sapply(close_clean_preC19, logreturnf) # compute log returns
+
+R_preC19 <- cor(returns_preC19) # this is a Pearson correlation 
+
+# igraph object with all the edges
+full_preC19 <- graph_from_adjacency_matrix(R_preC19, mode = "undirected", 
+                                           weighted = TRUE, diag = FALSE) 
+
+# set lower triangular matrix and diagonals to 0 to enable computation
+# of threshold value
+R_preC19[lower.tri(R_preC19, diag=TRUE)] <- 0 
+
+# find the z-values of the correlation coefficients
+z_values_preC19 <- FisherZ(R_preC19) 
+
+mean_z_value_preC19 <- mean(z_values_preC19) # find the mean of the z-values
+
+# convert the z-value back to a correlation coefficient
+threshold_value_preC19 <- FisherZInv(mean_z_value_preC19) 
+
+# threshold value for pre-C19 (mean + 2SD)
+threshold_value_preC19 <- threshold_value_preC19 + 2*sd(R_preC19)
+
+cut_edges_preC19 <- delete.edges(full_preC19, E(full_preC19)[(weight < threshold_value_preC19) & (weight > (threshold_value_preC19*-1))]) # remove edges for pre-C19 (mean + 2SD)
+```
+
+```{r pre edge density vs tv plot}
+
+tv <- seq(from = -1, to = 1, by = 0.01)
+
+threshold_list_preC19 <- c()
+edge_density_list_preC19 <- c()
+
+for (tv_preC19 in tv) {
+  
+  filtered_g_preC19 <- delete.edges(full_preC19, E(full_preC19)[(weight < tv_preC19) & (weight > (tv_preC19*-1))])
+  
+  edge_density_preC19 <- edge_density(filtered_g_preC19) * 100  
+  
+  threshold_list_preC19 <- c(threshold_list_preC19, tv_preC19)
+  edge_density_list_preC19 <- c(edge_density_list_preC19, edge_density_preC19)
+}
+
+ed_df_preC19 <- data.frame(Threshold = threshold_list_preC19, Edge_Density = edge_density_list_preC19)
+
+tvs_preC19 <- c(FisherZInv(mean_z_value_preC19), FisherZInv(mean_z_value_preC19) + sd(R_preC19), threshold_value_preC19, FisherZInv(mean_z_value_preC19) + 3*sd(R_preC19))
+
+edge_densities_preC19 <- numeric(length(tvs_preC19))
+for (i in seq_along(tvs_preC19)) {
+  closest_threshold <- ed_df_preC19$Threshold[which.min(abs(ed_df_preC19$Threshold - tvs_preC19[i]))]
+  edge_densities_preC19[i] <- ed_df_preC19$Edge_Density[ed_df_preC19$Threshold == closest_threshold]
+}
+
+legend_df_preC19 <- data.frame(Threshold = tvs_preC19, Edge_Density = edge_densities_preC19)
+
+line_data <- data.frame(xintercept = tvs_preC19, Lines = c("Mean", "Mean + 1SD", "Mean + 2SD", "Mean + 3SD"), color = c("red", "blue", "green", "purple"), stringsAsFactors = FALSE)
+
+
+ggplot(ed_df_preC19, aes(x = Threshold, y = Edge_Density)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Threshold Value", y = "Edge Density (%)", title = "Edge Density vs. Varying Threshold Values in the Pre-COVID-19 Period") +
+  geom_vline(xintercept = tvs_preC19, linetype = "dashed", color = c("red", "blue", "green", "purple"), linewidth = 0.6) +  # Add specific vertical lines with a legend
+  geom_hline(yintercept = edge_densities_preC19, linetype = "dashed", color = c("grey40", "grey40", "green", "grey40"), linewidth = 0.6) +  # Add a horizontal line at the y-intercept
+  annotate("text", line_data$xintercept, max(ed_df_preC19$Edge_Density), hjust = 1, vjust = 1.2, size = 3,angle = 90,
+    label = line_data$Lines) +
+  annotate("text", -1, edge_densities_preC19, size = 3, vjust = 2, hjust = 0.7,
+    label = c("82.28%", "35.48%", "11.23%", "2.98%")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r pre plot, echo = FALSE, fig.height = 20, fig.width = 20, out.width = "100%"}
+
+plot(cut_edges_preC19, layout = layout_nicely(cut_edges_preC19), vertex.size = 7, vertex.color = clr, vertex.frame.color = "black", vertex.label = V(cut_edges_preC19)$name, vertex.label.family = "Arial", vertex.label.font = 1, vertex.label.cex = 1, vertex.label.color = "black", edge.color = ifelse(E(cut_edges_preC19)$weight > 0, "blue","red"), edge.width = abs(E(cut_edges_preC19)$weight)*8, edge.curved = 0.5)
+
+legend(x = -0.9, y = -1.05, legend = levels(as.factor(df_C19$Subsectors)), pch = 20, col = colour, pt.cex = 6, cex = 1.7, text.col = "black", title = "Node Colour", ncol = 4) # legend for indication 
+```
+
+### During COVID-19 Network
+
+```{r during network, message = FALSE, warning = FALSE}
+
+close_price_duringC19 <- read_excel("C:/Users/User/Desktop/Masters/ICMS5/COVID-19 Data Set.xlsx", 
+                                 sheet = 5) # load Excel sheet into R
+
+# remove "Exchange Date" column
+close_clean_duringC19 <- close_price_duringC19[2:ncol(close_price_duringC19)] 
+
+returns_duringC19 <- sapply(close_clean_duringC19, logreturnf) # compute log returns
+
+R_duringC19 <- cor(returns_duringC19) # this is a Pearson correlation 
+
+# igraph object with all the edges
+full_duringC19 <- graph_from_adjacency_matrix(R_duringC19, mode = "undirected", 
+                                           weighted = TRUE, diag = FALSE) 
+
+# set lower triangular matrix and diagonals to 0 to enable computation
+# of threshold value
+R_duringC19[lower.tri(R_duringC19, diag=TRUE)] <- 0 
+
+# find the z-values of the correlation coefficients
+z_values_duringC19 <- FisherZ(R_duringC19) 
+
+mean_z_value_duringC19 <- mean(z_values_duringC19) # find the mean of the z-values
+
+# convert the z-value back to a correlation coefficient
+threshold_value_duringC19 <- FisherZInv(mean_z_value_duringC19) 
+
+# threshold value for during C19 (mean + 2SD)
+threshold_value_duringC19 <- threshold_value_duringC19 + 2*sd(R_duringC19)
+
+cut_edges_duringC19 <- delete.edges(full_duringC19, E(full_duringC19)[(weight < threshold_value_duringC19) & (weight > (threshold_value_duringC19*-1))]) # remove edges for during C19 (mean + 2SD)
+
+gsize(full_duringC19)
+gsize(cut_edges_duringC19)
+```
+
+
+```{r during edge density vs tv plot}
+
+tv <- seq(from = -1, to = 1, by = 0.01)
+
+threshold_list_duringC19 <- c()
+edge_density_list_duringC19 <- c()
+
+for (tv_duringC19 in tv) {
+  
+  filtered_g_duringC19 <- delete.edges(full_duringC19, E(full_duringC19)[(weight < tv_duringC19) & (weight > (tv_duringC19*-1))])
+  
+  edge_density_duringC19 <- edge_density(filtered_g_duringC19) * 100  
+  
+  threshold_list_duringC19 <- c(threshold_list_duringC19, tv_duringC19)
+  edge_density_list_duringC19 <- c(edge_density_list_duringC19, edge_density_duringC19)
+}
+
+ed_df_duringC19 <- data.frame(Threshold = threshold_list_duringC19, Edge_Density = edge_density_list_duringC19)
+
+tvs_duringC19 <- c(FisherZInv(mean_z_value_duringC19), FisherZInv(mean_z_value_duringC19) + sd(R_duringC19), threshold_value_duringC19, FisherZInv(mean_z_value_duringC19) + 3*sd(R_duringC19))
+
+edge_densities_duringC19 <- numeric(length(tvs_duringC19))
+for (i in seq_along(tvs_duringC19)) {
+  closest_threshold <- ed_df_duringC19$Threshold[which.min(abs(ed_df_duringC19$Threshold - tvs_duringC19[i]))]
+  edge_densities_duringC19[i] <- ed_df_duringC19$Edge_Density[ed_df_duringC19$Threshold == closest_threshold]
+}
+
+legend_df_duringC19 <- data.frame(Threshold = tvs_duringC19, Edge_Density = edge_densities_duringC19)
+
+line_data <- data.frame(xintercept = tvs_duringC19, Lines = c("Mean", "Mean + 1SD", "Mean + 2SD", "Mean + 3SD"), color = c("red", "blue", "green", "purple"), stringsAsFactors = FALSE)
+
+
+ggplot(ed_df_duringC19, aes(x = Threshold, y = Edge_Density)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Threshold Value", y = "Edge Density (%)", title = "Edge Density vs. Varying Threshold Values in the During COVID-19 Period") +
+  geom_vline(xintercept = tvs_duringC19, linetype = "dashed", color = c("red", "blue", "green", "purple"), linewidth = 0.6) +  # Add specific vertical lines with a legend
+  geom_hline(yintercept = edge_densities_duringC19, linetype = "dashed", color = c("grey40", "grey40", "green", "grey40"), linewidth = 0.6) +  # Add a horizontal line at the y-intercept
+  annotate("text", line_data$xintercept, max(ed_df_duringC19$Edge_Density), hjust = 1, vjust = 1.2, size = 3,angle = 90,
+    label = line_data$Lines) +
+  annotate("text", -1, edge_densities_duringC19, size = 3, vjust = 2, hjust = 0.7,
+   label = c("69.03%", "31.87%", "11.81%", "3.29%")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r during plot, echo = FALSE, fig.height = 20, fig.width = 20, out.width = "100%"}
+
+plot(cut_edges_duringC19, layout = layout_nicely(cut_edges_duringC19), vertex.size = 7, vertex.color = clr, vertex.frame.color = "black", vertex.label = V(cut_edges_duringC19)$name, vertex.label.family = "Arial", vertex.label.font = 1, vertex.label.cex = 1, vertex.label.color = "black", edge.color = ifelse(E(cut_edges_duringC19)$weight > 0, "blue","red"), edge.width = abs(E(cut_edges_duringC19)$weight)*8, edge.curved = 0.5)
+
+legend(x = -0.9, y = -1.05, legend = levels(as.factor(df_C19$Subsectors)), pch = 20, col = colour, pt.cex = 6, cex = 1.7, text.col = "black", title = "Node Colour", ncol = 4) # legend for indication 
+```
+
+### Post-COVID-19 Network
+
+```{r post network, message = FALSE, warning = FALSE}
+
+close_price_postC19 <- read_excel("C:/Users/User/Desktop/Masters/ICMS5/COVID-19 Data Set.xlsx", 
+                                 sheet = 6) # load Excel sheet into R
+
+# remove "Exchange Date" column
+close_clean_postC19 <- close_price_postC19[2:ncol(close_price_postC19)] 
+
+returns_postC19 <- sapply(close_clean_postC19, logreturnf) # compute log returns
+
+R_postC19 <- cor(returns_postC19) # this is a Pearson correlation 
+
+# igraph object with all the edges
+full_postC19 <- graph_from_adjacency_matrix(R_postC19, mode = "undirected", 
+                                           weighted = TRUE, diag = FALSE) 
+
+# set lower triangular matrix and diagonals to 0 to enable computation
+# of threshold value
+R_postC19[lower.tri(R_postC19, diag=TRUE)] <- 0 
+
+# find the z-values of the correlation coefficients
+z_values_postC19 <- FisherZ(R_postC19) 
+
+mean_z_value_postC19 <- mean(z_values_postC19) # find the mean of the z-values
+
+# convert the z-value back to a correlation coefficient
+threshold_value_postC19 <- FisherZInv(mean_z_value_postC19) 
+
+# threshold value for post-C19 (mean + 2SD)
+threshold_value_postC19 <- threshold_value_postC19 + 2*sd(R_postC19)
+
+cut_edges_postC19 <- delete.edges(full_postC19, E(full_postC19)[(weight < threshold_value_postC19) & (weight > (threshold_value_postC19*-1))]) # remove edges for post-C19 (mean + 2SD)
+```
+
+
+```{r post edge density vs tv plot}
+
+tv <- seq(from = -1, to = 1, by = 0.01)
+
+threshold_list_postC19 <- c()
+edge_density_list_postC19 <- c()
+
+for (tv_postC19 in tv) {
+  
+  filtered_g_postC19 <- delete.edges(full_postC19, E(full_postC19)[(weight < tv_postC19) & (weight > (tv_postC19*-1))])
+  
+  edge_density_postC19 <- edge_density(filtered_g_postC19) * 100  
+  
+  threshold_list_postC19 <- c(threshold_list_postC19, tv_postC19)
+  edge_density_list_postC19 <- c(edge_density_list_postC19, edge_density_postC19)
+}
+
+ed_df_postC19 <- data.frame(Threshold = threshold_list_postC19, Edge_Density = edge_density_list_postC19)
+
+tvs_postC19 <- c(FisherZInv(mean_z_value_postC19), FisherZInv(mean_z_value_postC19) + sd(R_postC19), threshold_value_postC19, FisherZInv(mean_z_value_postC19) + 3*sd(R_postC19))
+
+edge_densities_postC19 <- numeric(length(tvs_postC19))
+for (i in seq_along(tvs_postC19)) {
+  closest_threshold <- ed_df_postC19$Threshold[which.min(abs(ed_df_postC19$Threshold - tvs_postC19[i]))]
+  edge_densities_postC19[i] <- ed_df_postC19$Edge_Density[ed_df_postC19$Threshold == closest_threshold]
+}
+
+legend_df_postC19 <- data.frame(Threshold = tvs_postC19, Edge_Density = edge_densities_postC19)
+
+line_data <- data.frame(xintercept = tvs_postC19, Lines = c("Mean", "Mean + 1SD", "Mean + 2SD", "Mean + 3SD"), color = c("red", "blue", "green", "purple"), stringsAsFactors = FALSE)
+
+
+ggplot(ed_df_postC19, aes(x = Threshold, y = Edge_Density)) +
+  geom_line() +
+  geom_point() +
+  labs(x = "Threshold Value", y = "Edge Density (%)", title = "Edge Density vs. Varying Threshold Values in the Post-COVID-19 Period") +
+  geom_vline(xintercept = tvs_postC19, linetype = "dashed", color = c("red", "blue", "green", "purple"), linewidth = 0.6) +  # Add specific vertical lines with a legend
+  geom_hline(yintercept = edge_densities_postC19, linetype = "dashed", color = c("grey40", "grey40", "green", "grey40"), linewidth = 0.6) +  # Add a horizontal line at the y-intercept
+  annotate("text", line_data$xintercept, max(ed_df_postC19$Edge_Density), hjust = 1, vjust = 1.2, size = 3,angle = 90,
+    label = line_data$Lines) +
+  annotate("text", -1, edge_densities_postC19, size = 3, vjust = 2, hjust = 0.7,
+    label = c("75.76%", "33.66%", "10.35%", "2.60%")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))
+
+gsize(cut_edges_postC19)
+```
+
+```{r post plot, echo = FALSE, fig.height = 20, fig.width = 20, out.width = "100%"}
+
+plot(cut_edges_postC19, layout = layout_nicely(cut_edges_postC19), vertex.size = 7, vertex.color = clr, vertex.frame.color = "black", vertex.label = V(cut_edges_postC19)$name, vertex.label.family = "Arial", vertex.label.font = 1, vertex.label.cex = 1, vertex.label.color = "black", edge.color = ifelse(E(cut_edges_postC19)$weight > 0, "blue","red"), edge.width = abs(E(cut_edges_postC19)$weight)*8, edge.curved = 0.5)
+
+legend(x = -0.9, y = -1.05, legend = levels(as.factor(df_C19$Subsectors)), pch = 20, col = colour, pt.cex = 6, cex = 1.7, text.col = "black", title = "Node Colour", ncol = 4) # legend for indication 
+```
+
+### Global Clustering Coefficient and Average Path Length
+
+```{r sw, message = FALSE}
+
+desc_pre_C19 <- cbind("Pre", 
+                    threshold_value_preC19,  
+                    gsize(cut_edges_preC19), 
+                    graph.density(cut_edges_preC19),
+                    transitivity(cut_edges_preC19),
+                    mean_distance(cut_edges_preC19, weights = NA)) # descriptives for pre-C19
+
+desc_during_C19 <- cbind("During", 
+                    threshold_value_duringC19,  
+                    gsize(cut_edges_duringC19), 
+                    graph.density(cut_edges_duringC19),
+                    transitivity(cut_edges_duringC19),
+                    mean_distance(cut_edges_duringC19, weights = NA)) # descriptives for during C19
+
+desc_post_C19 <- cbind("Post", 
+                    threshold_value_postC19,  
+                    gsize(cut_edges_postC19), 
+                    graph.density(cut_edges_postC19),
+                    transitivity(cut_edges_postC19),
+                    mean_distance(cut_edges_postC19, weights = NA)) # descriptives for post-C19
+
+desc_col_names <- c("Period","Threshold Value", 
+                  "Number of Edges", "Density", "Global Clustering Coefficient",
+                  "Average Path Length") # name the columns
+
+as_hux(rbind(desc_col_names, desc_pre_C19, desc_during_C19, desc_post_C19)) %>%
+  set_caption("Table: Descriptives of COVID-19 Pandemic Networks") %>%
+  set_right_border(everywhere, everywhere) %>%
+  set_left_border(everywhere, 1) %>%
+  set_bottom_border(everywhere, everywhere) %>%
+  set_top_border(1, everywhere) %>%
+  set_align(everywhere, everywhere, "centre") %>%
+  set_bold(1, everywhere, value = TRUE) # create a table for the values of each period side by side
+```
+
+### Degree Distribution Plots
+
+```{r pl, message = FALSE, fig.height = 6, fig.width = 15, out.width = "100%"}
+
+# Only look at the giant component
+
+degree_dist_pre <- degree_distribution(cut_edges_preC19)
+
+degree_dist_during <- degree_distribution(cut_edges_duringC19)
+
+degree_dist_post <- degree_distribution(cut_edges_postC19)
+
+# Log-log Plot
+
+layout(matrix(c(1,2), nrow = 1))
+
+# Pre-COVID-19
+df_pre <- data.frame(k = 0:63, pr = degree_dist_pre)
+
+df_pre <- df_pre[df_pre$pr != 0,]
+
+plot(log(df_pre$k), log(df_pre$pr), ylab = "log(P(k))", xlab = "log(k)", 
+     main = "Degree Distribution of Pre-COVID-19 Network", cex.main = 0.8)
+
+fit_pre <- lm(log(df_pre$pr)~log(df_pre$k))
+
+abline(fit_pre, col = "red")
+
+legend("topright", legend = format(round(coef(fit_pre)[2],3), nsmall = 3), 
+       col = "red", lty = 1, cex = 0.65)
+
+
+# During COVID-19
+df_during <- data.frame(k = 0:70, pr = degree_dist_during)
+
+df_during <- df_during[df_during$pr != 0,]
+
+df_during <- df_during[df_during$k != 0,]
+
+plot(log(df_during$k), log(df_during$pr), ylab = "log(P(k))", xlab = "log(k)", 
+     main = "Degree Distribution of During COVID-19 Network", cex.main = 0.8)
+
+fit_during <- lm(log(df_during$pr)~log(df_during$k))
+
+abline(fit_during, col = "red")
+
+legend("topright", legend = format(round(coef(fit_during)[2],3), nsmall = 3), 
+       col = "red", lty = 1, cex = 0.65)
+
+# Post-COVID-19
+df_post <- data.frame(k = 0:64, pr = degree_dist_post)
+
+df_post <- df_post[df_post$pr != 0,]
+
+df_post <- df_post[df_post$k != 0,]
+
+plot(log(df_post$k), log(df_post$pr), ylab = "log(P(k))", xlab = "log(k)", 
+     main = "Degree Distribution of Post-COVID-19 Network", cex.main = 0.8)
+
+fit_post <- lm(log(df_post$pr)~log(df_post$k))
+
+abline(fit_post, col = "red")
+
+legend("topright", legend = format(round(coef(fit_post)[2],3), nsmall = 3), 
+       col = "red", lty = 1, cex = 0.65)
+
+```
+```{r histogram, echo = FALSE, fig.height = 8, fig.width = 15}
+## Histogram on Linear Scale
+degree_dist_pre <- degree_distribution(cut_edges_preC19)
+
+degree_dist_during <- degree_distribution(cut_edges_duringC19)
+
+degree_dist_post <- degree_distribution(cut_edges_postC19)
+
+
+# pre-covid degree distribution on linear scale
+barplot(degree_dist_pre, xlab = "Degree, k", ylab = "P(k)", 
+        main = "Degree Distribution of Pre-COVID-19 Network", names.arg = c(0:63), 
+        col = "orange", ylim = c(0,0.07))
+
+# during covid degree distribution on linear scale
+barplot(degree_dist_during, xlab = "Degree, k", ylab = "P(k)", 
+        main = "Degree Distribution of During COVID-19 Network", names.arg = c(0:70), 
+        col = "orange", ylim = c(0,0.3))
+
+# post-covid degree distribution on linear scale
+barplot(degree_dist_post, xlab = "Degree, k", ylab = "P(k)", 
+        main = "Degree Distribution of Post-COVID-19 Network", names.arg = c(0:64), 
+        col = "orange", ylim = c(0,0.07))
+
+```
+
+
+### Centrality Measures
+
+#```{r contributing centralities, message = FALSE, warning = FALSE}
+
+# Pre
+pre_cent<-proper_centralities(cut_edges_preC19)
+
+calculate_centralities(cut_edges_preC19, include = pre_cent[c(7, 10, 15, 43)])%>%
+  pca_centralities(scale.unit = TRUE)
+
+# During
+during_components <- clusters(cut_edges_duringC19, mode="weak")
+
+during_big_cluster_id <- which.max(during_components$csize)
+
+# id of nodes
+during_node_ids <- V(cut_edges_duringC19)[during_components$membership == during_big_cluster_id]
+
+# giant component
+cut_edges_duringC19 <- induced_subgraph(cut_edges_duringC19, during_node_ids)
+
+during_cent <- proper_centralities(cut_edges_duringC19)
+
+calculate_centralities(cut_edges_duringC19, include = during_cent[c(7, 10, 15, 43)])%>%
+  pca_centralities(scale.unit = TRUE)
+
+# Post
+post_components <- clusters(cut_edges_postC19, mode="weak")
+
+post_big_cluster_id <- which.max(post_components$csize)
+
+# id of nodes
+post_node_ids <- V(cut_edges_postC19)[post_components$membership == post_big_cluster_id]
+
+# giant component
+cut_edges_postC19 <- induced_subgraph(cut_edges_postC19, post_node_ids)
+
+post_cent <- proper_centralities(cut_edges_postC19)
+
+calculate_centralities(cut_edges_postC19, include = post_cent[c(7, 10, 15, 43)])%>%
+  pca_centralities(scale.unit = TRUE)
+#```
+
+### Degree Centrality
+
+```{r degree centrality, echo = FALSE, warning = FALSE}
+
+# Pre-C19
+
+# find the degree values for pre-C19
+Degree1 <- format(round(degree(cut_edges_preC19),3), nsmall = 3) 
+
+# create a data frame of the company tickers and degree values
+dataframe1 <- data.frame(name1 = V(cut_edges_preC19)$name, Degree1) 
+
+# order the values in decreasing order
+sort_degree1 <- dataframe1[order(dataframe1$Degree1, decreasing = TRUE),] 
+
+top_degree1 <- head(sort_degree1, 5) # get the top 5 degree values
+
+# During C19
+
+ # find the degree values for during C19
+Degree2 <- format(round(degree(cut_edges_duringC19),3), nsmall = 3)
+
+# create a data frame of the company tickers and degree values
+dataframe2 <- data.frame(name2 = V(cut_edges_duringC19)$name, Degree2) 
+
+# order the values in decreasing order
+sort_degree2 <- dataframe2[order(dataframe2$Degree2, decreasing = TRUE),] 
+
+top_degree2 <- head(sort_degree2, 5) # get the top 5 degree values
+
+# Post-C19
+
+# find the degree values for post-C19
+Degree3 <- format(round(degree(cut_edges_postC19),3), nsmall = 3) 
+
+# create a data frame of the company tickers and degree values
+dataframe3 <- data.frame(name3 = V(cut_edges_postC19)$name, Degree3)
+
+# order the values in decreasing order
+sort_degree3 <- dataframe3[order(dataframe3$Degree3, decreasing = TRUE),] 
+
+top_degree3 <- head(sort_degree3, 5) # get the top 5 degree values
+
+# table
+
+# put the companies' tickers and degree values in one column for pre
+degree_pre <- paste(top_degree1$name1, top_degree1$Degree1) 
+
+# put the companies' tickers and degree values in one column for during
+degree_during <- paste(top_degree2$name2, top_degree2$Degree2)
+
+# put the companies' tickers and degree values in one column for post
+degree_post <- paste(top_degree3$name3, top_degree3$Degree3)
+
+# bind the companies' tickers and degree values for each year by column
+degree_values <- cbind(1:5, degree_pre, degree_during, degree_post) 
+
+# set the column names to be binded
+column_names1 <-  c("No.", "Degree Pre-COVID-19", 
+                    "Degree During COVID-19", "Degree Post-COVID-19") 
+
+as_hux(rbind(column_names1, degree_values)) %>%
+  set_caption("Table: Degree centrality values for the COVID-19 Pandemic Networks") %>%
+  set_right_border(everywhere, everywhere) %>%
+  set_left_border(everywhere, 1) %>%
+  set_bottom_border(everywhere, everywhere) %>%
+  set_top_border(1, everywhere) %>%
+  set_align(everywhere, everywhere, "centre") %>%
+  set_bold(1, everywhere, value = TRUE) # create a table
+```
+### Eigenvector Centrality
+
+```{r eigenvector centralities, echo = FALSE, warning = FALSE}
+
+# Pre-C19
+
+# find the eigenvector values for Pre-C19
+Ev1 <- format(round(eigen_centrality(cut_edges_preC19)$vector,3), nsmall = 3) 
+
+# create a data frame of the company tickers and eigenvector values
+dataframe1 <- data.frame(name1 = V(cut_edges_preC19)$name, Ev1) 
+
+# order the values in decreasing order
+sort_ev1 <- dataframe1[order(dataframe1$Ev1, decreasing = TRUE),] 
+
+top_ev1 <- head(sort_ev1, 5) # get the top 5 eigenvector values
+
+# During C19
+
+# find the eigenvector values for during C19
+Ev2 <- format(round(eigen_centrality(cut_edges_duringC19)$vector,3), nsmall = 3) 
+
+# create a data frame of the company tickers and eigenvector values
+dataframe2 <- data.frame(name2 = V(cut_edges_duringC19)$name, Ev2) 
+
+# order the values in decreasing order
+sort_ev2 <- dataframe2[order(dataframe2$Ev2, decreasing = TRUE),] 
+
+top_ev2 <- head(sort_ev2, 5) # get the top 5 eigenvector values
+
+# Post-C19
+
+# find the eigenvector values for post-C19
+Ev3 <- format(round(eigen_centrality(cut_edges_postC19)$vector,3), nsmall = 3) 
+
+# create a data frame of the company tickers and eigenvector values
+dataframe3 <- data.frame(name3 = V(cut_edges_postC19)$name, Ev3) 
+
+# order the values in decreasing order
+sort_ev3 <- dataframe3[order(dataframe3$Ev3, decreasing = TRUE),] 
+
+top_ev3 <- head(sort_ev3, 5) # get the top 5 eigenvector values
+
+# table
+
+# put the companies' tickers and eigenvector values in one column for pre
+ev_pre <- paste(top_ev1$name1, top_ev1$Ev1) 
+
+# put the companies' tickers and eigenvector values in one column for during
+ev_during <- paste(top_ev2$name2, top_ev2$Ev2) 
+
+# put the companies' tickers and eigenvector values in one column for post
+ev_post <- paste(top_ev3$name3, top_ev3$Ev3) 
+
+# bind the companies' tickers and eigenvector values for each year by column
+ev_values <- cbind(1:5, ev_pre, ev_during, ev_post) 
+
+# set the column names to be binded
+column_names2 <-  c("No.", "Eigenvector Pre-COVID-19", 
+                    "Eigenvector During COVID-19", 
+                    "Eigenvector Post-COVID-19") 
+
+as_hux(rbind(column_names2, ev_values)) %>%
+  set_caption("Table: Eigenvector centrality values for the COVID-19 Pandemic Networks") %>%
+  set_right_border(everywhere, everywhere) %>%
+  set_left_border(everywhere, 1) %>%
+  set_bottom_border(everywhere, everywhere) %>%
+  set_top_border(1, everywhere) %>%
+  set_align(everywhere, everywhere, "centre") %>%
+  set_bold(1, everywhere, value = TRUE) # create a table 
+```
+
+
+```{r pre power law, echo = FALSE, fig.height = 8, fig.width = 15}
+pre_degree <- table(degree(cut_edges_preC19))
+
+pre_degree_counts <- sort(pre_degree, decreasing = TRUE)
+
+xmins = unique(pre_degree_counts) # search over all unique values of data
+
+dat = numeric(length(xmins))
+
+z = sort(pre_degree_counts)
+
+for (i in 1:length(xmins)){
+ xmin = xmins[i] # choose next xmin candidate
+ z1 = z[z>=xmin] # truncate data below this xmin value
+ n = length(z1)
+ a = 1+ n*(sum(log(z1/xmin)))^-1 # estimate alpha using direct MLE
+ cx = (n:1)/n # construct the empirical CDF
+ cf = (z1/xmin)^(-a+1) # construct the fitted theoretical CDF
+ dat[i] = max(abs(cf-cx)) # compute the KS statistic
+}
+
+D = min(dat[dat>0],na.rm=TRUE) # find smallest D value
+xmin = xmins[which(dat==D)] # find corresponding xmin value
+z = pre_degree_counts[pre_degree_counts>=xmin]
+z = sort(z)
+n = length(z)
+alpha = 1 + n*(sum(log(z/xmin)))^-1 # get corresponding alpha estimate
+
+library(gsl)
+library(numDeriv)
+
+# the following code, up to the rpowerlaw, came from this website:
+dpowerlaw <- function(x, alpha=2, xmin=1, log=F) {
+ if (log)
+   log(alpha-1) - log(xmin) - alpha * log(x / xmin)
+ else
+   ((alpha - 1) / xmin) * ((x / xmin) ^ (-alpha))
+}
+
+ppowerlaw <- function(q, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ p <- (q / xmin) ^ (- alpha + 1)
+ if (lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- log(p)
+ p
+}
+
+qpowerlaw <- function(p, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ if (!lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- exp(p)
+ xmin * ((1 - p) ^ (-1 / (alpha - 1)))
+}
+
+rpowerlaw <- function(n, alpha=2, xmin=1) {
+ qpowerlaw(runif(n, 0, 1), alpha, xmin)
+}
+
+testresult_pre = numeric(2500)
+
+for (i in 1:2500){
+  power = rpowerlaw(length(z),alpha,xmin) #randomly generate power law data using the parameters we found
+  w = ks.test(z,power) #using KS test to see how good the fit is
+  if (w$p.value > 0.10){
+    testresult_pre[i] = 1}
+  if (w$p.value <= 0.10){
+    testresult_pre[i] = 0}
+ }
+sum(testresult_pre)
+
+par(mfrow = c(1, 2))
+
+pre_degree_df <- data.frame(pre_degree_counts)
+
+# Create a dataframe with all possible degree values from 0 to the maximum observed degree
+pre_all_degrees <- data.frame(Var1 = min(as.numeric(as.character(pre_degree_df$Var1))):max(as.numeric(as.character(pre_degree_df$Var1))))
+
+# Merge the all_degrees dataframe with your original degree-frequency data, filling in missing values with zeros
+pre_filled_data <- merge(pre_all_degrees, pre_degree_df, by = "Var1", all.x = TRUE)
+
+pre_filled_data$Freq[is.na(pre_filled_data$Freq)] <- 0
+
+# Generate fitted power-law line
+fitted_x <- seq(min(as.numeric(as.character(pre_degree_df$Var1))), max(as.numeric(as.character(pre_degree_df$Var1))), by = 1)  # Generate x values for the fitted line
+
+fitted_y <- rpowerlaw(length(fitted_x), alpha = alpha, xmin = xmin)  # Calculate y values for the fitted line
+
+plot(as.numeric(as.character(pre_filled_data$Var1)), pre_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Degree, k', ylab = 'Frequency of Degree, k', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(pre_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, fitted_y, col = 'red', lwd = 2)
+
+legend("topright", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+pre_filled_data <- pre_filled_data[order(pre_filled_data$Freq, decreasing = TRUE),]
+
+plot(fitted_x, pre_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Index', ylab = 'Frequency of Each Degree Index', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(pre_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, sort(fitted_y, decreasing = T), col = 'red', lwd = 2)
+
+legend("topright", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+print(c(alpha, xmin, sum(testresult_pre)))
+```
+
+```{r during power law, echo = FALSE, fig.height = 8, fig.width = 15}
+during_degree <- table(degree(cut_edges_duringC19))
+
+during_degree_counts <- sort(during_degree, decreasing = TRUE)
+
+xmins = unique(during_degree_counts) # search over all unique values of data
+
+dat = numeric(length(xmins))
+
+z = sort(during_degree_counts)
+
+for (i in 1:length(xmins)){
+ xmin = xmins[i] # choose next xmin candidate
+ z1 = z[z>=xmin] # truncate data below this xmin value
+ n = length(z1)
+ a = 1+ n*(sum(log(z1/xmin)))^-1 # estimate alpha using direct MLE
+ cx = (n:1)/n # construct the empirical CDF
+ cf = (z1/xmin)^(-a+1) # construct the fitted theoretical CDF
+ dat[i] = max(abs(cf-cx)) # compute the KS statistic
+}
+
+D = min(dat[dat>0],na.rm=TRUE) # find smallest D value
+xmin = xmins[which(dat==D)] # find corresponding xmin value
+z = during_degree_counts[during_degree_counts>=xmin]
+z = sort(z)
+n = length(z)
+alpha = 1 + n*(sum(log(z/xmin)))^-1 # get corresponding alpha estimate
+
+library(gsl)
+library(numDeriv)
+
+# the following code, up to the rpowerlaw, came from this website:
+dpowerlaw <- function(x, alpha=2, xmin=1, log=F) {
+ if (log)
+   log(alpha-1) - log(xmin) - alpha * log(x / xmin)
+ else
+   ((alpha - 1) / xmin) * ((x / xmin) ^ (-alpha))
+}
+
+ppowerlaw <- function(q, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ p <- (q / xmin) ^ (- alpha + 1)
+ if (lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- log(p)
+ p
+}
+
+qpowerlaw <- function(p, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ if (!lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- exp(p)
+ xmin * ((1 - p) ^ (-1 / (alpha - 1)))
+}
+
+rpowerlaw <- function(n, alpha=2, xmin=1) {
+ qpowerlaw(runif(n, 0, 1), alpha, xmin)
+}
+
+testresult_during = numeric(2500)
+
+for (i in 1:2500){
+  power = rpowerlaw(length(z),alpha,xmin) #randomly generate power law data using the parameters we found
+  w = ks.test(z,power) #using KS test to see how good the fit is
+  if (w$p.value > 0.10){
+    testresult_during[i] = 1}
+  if (w$p.value <= 0.10){
+    testresult_during[i] = 0}
+ }
+sum(testresult_during)
+
+par(mfrow = c(1, 2))
+
+during_degree_df <- data.frame(during_degree_counts)
+
+# Create a dataframe with all possible degree values from 0 to the maximum observed degree
+during_all_degrees <- data.frame(Var1 = min(as.numeric(as.character(during_degree_df$Var1))):max(as.numeric(as.character(during_degree_df$Var1))))
+
+# Merge the all_degrees dataframe with your original degree-frequency data, filling in missing values with zeros
+during_filled_data <- merge(during_all_degrees, during_degree_df, by = "Var1", all.x = TRUE)
+
+during_filled_data$Freq[is.na(during_filled_data$Freq)] <- 0
+
+# Generate fitted power-law line
+fitted_x <- seq(min(as.numeric(as.character(during_degree_df$Var1))), max(as.numeric(as.character(during_degree_df$Var1))), by = 1)  # Generate x values for the fitted line
+
+fitted_y <- rpowerlaw(length(fitted_x), alpha = alpha, xmin = xmin)  # Calculate y values for the fitted line
+
+plot(as.numeric(as.character(during_filled_data$Var1)), during_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Degree, k', ylab = 'Frequency of Degree, k', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(during_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, fitted_y, col = 'red', lwd = 2)
+
+legend("topright", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+during_filled_data <- during_filled_data[order(during_filled_data$Freq, decreasing = TRUE),]
+
+plot(fitted_x, during_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Index', ylab = 'Frequency of Each Degree Index', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(during_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, sort(fitted_y, decreasing = T), col = 'red', lwd = 2)
+
+legend("topright", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+print(c(alpha, xmin, sum(testresult_during)))
+```
+
+```{r post power law, echo = FALSE, fig.height = 8, fig.width = 15}
+post_degree <- table(degree(cut_edges_postC19))
+
+post_degree_counts <- sort(post_degree, decreasing = TRUE)
+
+xmins = unique(post_degree_counts) # search over all unique values of data
+
+dat = numeric(length(xmins))
+
+z = sort(post_degree_counts)
+
+for (i in 1:length(xmins)){
+ xmin = xmins[i] # choose next xmin candidate
+ z1 = z[z>=xmin] # truncate data below this xmin value
+ n = length(z1)
+ a = 1+ n*(sum(log(z1/xmin)))^-1 # estimate alpha using direct MLE
+ cx = (n:1)/n # construct the empirical CDF
+ cf = (z1/xmin)^(-a+1) # construct the fitted theoretical CDF
+ dat[i] = max(abs(cf-cx)) # compute the KS statistic
+}
+
+D = min(dat[dat>0],na.rm=TRUE) # find smallest D value
+xmin = xmins[which(dat==D)] # find corresponding xmin value
+z = post_degree_counts[post_degree_counts>=xmin]
+z = sort(z)
+n = length(z)
+alpha = 1 + n*(sum(log(z/xmin)))^-1 # get corresponding alpha estimate
+
+library(gsl)
+library(numDeriv)
+
+# the following code, up to the rpowerlaw, came from this website:
+dpowerlaw <- function(x, alpha=2, xmin=1, log=F) {
+ if (log)
+   log(alpha-1) - log(xmin) - alpha * log(x / xmin)
+ else
+   ((alpha - 1) / xmin) * ((x / xmin) ^ (-alpha))
+}
+
+ppowerlaw <- function(q, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ p <- (q / xmin) ^ (- alpha + 1)
+ if (lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- log(p)
+ p
+}
+
+qpowerlaw <- function(p, alpha=2, xmin=1, lower.tail=T, log.p = F) {
+ if (!lower.tail)
+   p <- 1-p
+ if (log.p)
+   p <- exp(p)
+ xmin * ((1 - p) ^ (-1 / (alpha - 1)))
+}
+
+rpowerlaw <- function(n, alpha=2, xmin=1) {
+ qpowerlaw(runif(n, 0, 1), alpha, xmin)
+}
+
+testresult_post = numeric(2500)
+
+for (i in 1:2500){
+  power = rpowerlaw(length(z),alpha,xmin) #randomly generate power law data using the parameters we found
+  w = ks.test(z,power) #using KS test to see how good the fit is
+  if (w$p.value > 0.10){
+    testresult_post[i] = 1}
+  if (w$p.value <= 0.10){
+    testresult_post[i] = 0}
+ }
+sum(testresult_post)
+
+par(mfrow = c(1, 2))
+
+post_degree_df <- data.frame(post_degree_counts)
+
+# Create a dataframe with all possible degree values from 0 to the maximum observed degree
+post_all_degrees <- data.frame(Var1 = min(as.numeric(as.character(post_degree_df$Var1))):max(as.numeric(as.character(post_degree_df$Var1))))
+
+# Merge the all_degrees dataframe with your original degree-frequency data, filling in missing values with zeros
+post_filled_data <- merge(post_all_degrees, post_degree_df, by = "Var1", all.x = TRUE)
+
+post_filled_data$Freq[is.na(post_filled_data$Freq)] <- 0
+
+# Generate fitted power-law line
+fitted_x <- seq(min(as.numeric(as.character(post_degree_df$Var1))), max(as.numeric(as.character(post_degree_df$Var1))), by = 1)  # Generate x values for the fitted line
+
+fitted_y <- rpowerlaw(length(fitted_x), alpha = alpha, xmin = xmin)  # Calculate y values for the fitted line
+
+plot(as.numeric(as.character(post_filled_data$Var1)), post_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Degree, k', ylab = 'Frequency of Degree, k', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(post_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, fitted_y, col = 'red', lwd = 2)
+
+legend("topleft", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+post_filled_data <- post_filled_data[order(post_filled_data$Freq, decreasing = TRUE),]
+
+plot(fitted_x, post_filled_data$Freq, type = 'l', col = 'blue', xlab = 'Index', ylab = 'Frequency of Each Degree Index', lwd = 2,
+     ylim = c(0, max(max(fitted_y), max(post_filled_data$Freq))))
+
+# Plot the fitted power-law line
+lines(fitted_x, sort(fitted_y, decreasing = T), col = 'red', lwd = 2)
+
+legend("topright", legend = c("Observed Distribution", "Randomly Generated\nPower Law Distribution"), 
+       col = c("blue", "red"), lty = 1, lwd = 2, cex = 0.9, y.intersp = 1.5)
+
+print(c(alpha, xmin, sum(testresult_post)))
+```
+
+```{r exponential}
+dat2 = numeric(length(xmins))
+
+z = sort(pre_degree_counts)
+
+for (i in 1:length(xmins)){
+ xmin = xmins[i] # choose next xmin candidate
+ z2 = z[z>=xmin] # truncate data below this xmin value
+ n = length(z2)
+ lambda = 1/(mean(z2)-xmin) # estimate lambda using direct MLE
+ cx = (1:n)/n # construct the empirical CDF
+ cf = 1 - exp(lambda*(xmin-z2)) # construct the fitted theoretical CDF
+ dat2[i] = max(abs(cf-cx)) # compute the KS statistic
+ }
+D = min(dat2[dat2>0],na.rm=TRUE) # find smallest D value
+xmin = xmins[which(dat2==D)] # find corresponding xmin value
+z = pre_degree_counts[pre_degree_counts>=xmin]
+z = sort(z)
+n = length(z)
+lambda = 1/(mean(z)-xmin)
+testresult2 = numeric(2500)
+for (i in 1:2500){
+ expfit = rexp(length(z),lambda) #randomly generate exponential data using the parameters we found
+ w1 = ks.test(expfit,z) #using KS test to see how good the fit is
+ if (w1$p.value > 0.10){
+   testresult2[i] = 1}
+ if (w1$p.value <= 0.10){
+   testresult2[i] = 0}
+ }
+sum(testresult2)
+```
+
+```{r reg exp}
+lambda2 = 1/mean(pre_degree_counts)
+testresult3 = numeric(length(pre_degree_counts))
+for (i in 1:2500){
+ expfit = rexp(length(pre_degree_counts),lambda2) #randomly generate exponential data using theparameters we found
+ w2 = ks.test(expfit,pre_degree_counts) #using KS test to see how good the fit is
+ if (w2$p.value > 0.10){
+   testresult3[i] = 1}
+ if (w2$p.value <= 0.10){
+   testresult3[i] = 0}
+ }
+sum(testresult3)
+```
+
+```{r log normal test}
+dat3 = numeric(length(xmins))
+z = sort(pre_degree_counts)
+for (i in 1:length(xmins)){
+ xmin = xmins[i] # choose next xmin candidate
+ z3 = z[z>=xmin] # truncate data below this xmin value
+ n = length(z3)
+ mu = sum(log(z3))/length(z3)
+ sigmasq = sum((log(z3)-mu)^2)/length(z3) # estimate lamda using direct MLE
+ cx = (1:n)/n # construct the empirical CDF
+ cf = pnorm((log(z3)-mu)/sqrt(sigmasq)) # construct the fitted theoretical CDF
+ dat3[i] = max(abs(cf-cx)) # compute the KS statistic
+ }
+D = min(dat3[dat3>0],na.rm=TRUE) # find smallest D value
+xmin = xmins[which(dat3==D)] # find corresponding xmin value
+z = pre_degree_counts[pre_degree_counts>=xmin]
+z = sort(z)
+n = length(z)
+mu = sum(log(z))/length(z)
+sigmasq = sum((log(z)-mu)^2)/length(z)
+testresult4 = numeric(2500)
+for (i in 1:2500){
+ lognfit = rlnorm(length(pre_degree_counts),mean=mu,sd=sqrt(sigmasq)) #randomly generate exponentialdata using the parameters we found
+ w3 = ks.test(lognfit,pre_degree_counts) #using KS test to see how good the fit is
+ if (w3$p.value > 0.10){
+ testresult4[i] = 1}
+ if (w3$p.value <= 0.10){
+ testresult4[i] = 0}
+ }
+sum(testresult4)
+```
+
+```{r reg log normal}
+mu2 = sum(log(pre_degree_counts[pre_degree_counts>0]))/length(pre_degree_counts[pre_degree_counts>0])
+sigmasq2 = sum((log(pre_degree_counts[pre_degree_counts>0])-mu2)^2)/length(pre_degree_counts[pre_degree_counts>0])
+testresult5 = numeric(2500)
+for (i in 1:2500){
+ lognfit = rlnorm(length(pre_degree_counts),mean=mu2,sd=sqrt(sigmasq2)) #randomly generate exponentialdata using the parameters we found
+ w3 = ks.test(lognfit,pre_degree_counts) #using KS test to see how good the fit is
+ if (w3$p.value > 0.10){
+   testresult5[i] = 1}
+ if (w3$p.value <= 0.10){
+   testresult5[i] = 0}
+ }
+sum(testresult5)
+
+```
+
+```{r density pre}
+
+threshold_value_preC19 <- FisherZInv(mean_z_value_preC19) 
+
+tv_mean <- threshold_value_preC19 
+
+tv_mean_1sd <- threshold_value_preC19 + sd(R_preC19)
+
+tv_mean_2sd <- threshold_value_preC19 + 2*sd(R_preC19)
+
+tv_mean_3sd <- threshold_value_preC19 + 3*sd(R_preC19)
+
+mean_edges <- delete.edges(full_preC19, E(full_preC19)[(weight < tv_mean) & (weight > (tv_mean*-1))]) 
+
+mean_1sd_edges <- delete.edges(full_preC19, E(full_preC19)[(weight < tv_mean_1sd) & (weight > (tv_mean_1sd*-1))]) 
+
+mean_2sd_edges <- delete.edges(full_preC19, E(full_preC19)[(weight < tv_mean_2sd) & (weight > (tv_mean_2sd*-1))]) 
+
+mean_3sd_edges <- delete.edges(full_preC19, E(full_preC19)[(weight < tv_mean_3sd) & (weight > (tv_mean_3sd*-1))]) 
+
+print(c(graph.density(mean_edges), graph.density(mean_1sd_edges), graph.density(mean_2sd_edges), graph.density(mean_3sd_edges)))
+
+```
+
+
+```{r density during}
+
+threshold_value_duringC19 <- FisherZInv(mean_z_value_duringC19) 
+
+tv_mean <- threshold_value_duringC19 
+
+tv_mean_1sd <- threshold_value_duringC19 + sd(R_duringC19)
+
+tv_mean_2sd <- threshold_value_duringC19 + 2*sd(R_duringC19)
+
+tv_mean_3sd <- threshold_value_duringC19 + 3*sd(R_duringC19)
+
+mean_edges <- delete.edges(full_duringC19, E(full_duringC19)[(weight < tv_mean) & (weight > (tv_mean*-1))]) 
+
+mean_1sd_edges <- delete.edges(full_duringC19, E(full_duringC19)[(weight < tv_mean_1sd) & (weight > (tv_mean_1sd*-1))]) 
+
+mean_2sd_edges <- delete.edges(full_duringC19, E(full_duringC19)[(weight < tv_mean_2sd) & (weight > (tv_mean_2sd*-1))]) 
+
+mean_3sd_edges <- delete.edges(full_duringC19, E(full_duringC19)[(weight < tv_mean_3sd) & (weight > (tv_mean_3sd*-1))]) 
+
+print(c(graph.density(mean_edges), graph.density(mean_1sd_edges), graph.density(mean_2sd_edges), graph.density(mean_3sd_edges)))
+
+```
+
+```{r density post}
+
+threshold_value_postC19 <- FisherZInv(mean_z_value_postC19) 
+
+tv_mean <- threshold_value_postC19 
+
+tv_mean_1sd <- threshold_value_postC19 + sd(R_postC19)
+
+tv_mean_2sd <- threshold_value_postC19 + 2*sd(R_postC19)
+
+tv_mean_3sd <- threshold_value_postC19 + 3*sd(R_postC19)
+
+mean_edges <- delete.edges(full_postC19, E(full_postC19)[(weight < tv_mean) & (weight > (tv_mean*-1))]) 
+
+mean_1sd_edges <- delete.edges(full_postC19, E(full_postC19)[(weight < tv_mean_1sd) & (weight > (tv_mean_1sd*-1))]) 
+
+mean_2sd_edges <- delete.edges(full_postC19, E(full_postC19)[(weight < tv_mean_2sd) & (weight > (tv_mean_2sd*-1))]) 
+
+mean_3sd_edges <- delete.edges(full_postC19, E(full_postC19)[(weight < tv_mean_3sd) & (weight > (tv_mean_3sd*-1))]) 
+
+print(c(graph.density(mean_edges), graph.density(mean_1sd_edges), graph.density(mean_2sd_edges), graph.density(mean_3sd_edges)))
+
+```
